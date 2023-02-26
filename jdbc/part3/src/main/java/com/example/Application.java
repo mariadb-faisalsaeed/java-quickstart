@@ -2,119 +2,97 @@ package com.example;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
-
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.Map;
+import java.util.Random;
 
 public class Application {
 
 	private static HikariDataSource dataSource;
 
-	/**
-	 * Entry point of the application. Initializes the connection pool and performs
-	 * CRUD operations against the database. You can configure the database
-	 * connection
-	 * in the {@link /src/main/resources/database.properties} file. You need an SQL
-	 * database with the following table:
-	 *
-	 * <pre>
-	 * CREATE TABLE programming_language(
-	 *     name VARCHAR(50) NOT NULL UNIQUE,
-	 *     Rating INT
-	 * );
-	 * </pre>
-	 *
-	 * @param args (not used)
-	 * @throws SQLException if an error occurs when interacting with the database
-	 */
-	public static void main(String[] args) throws SQLException {
+	public static void main(String[] args) throws SQLException, IOException {
+		BufferedReader reader = new BufferedReader(
+            new InputStreamReader(System.in));
+		
 		try {
 			initDatabaseConnectionPool();
-			deleteData("%");
-			readData();
-			createData("Java", 10);
-			createData("JavaScript", 9);
-			createData("C++", 8);
-			readData();
-			updateData("C++", 7);
-			readData();
-			deleteData("C++");
-			readData();
+			int ConnectionsToCreate=1;
+			String response;
+			while (ConnectionsToCreate > 0) {
+				System.out.print("\n\nHow many connections to create...: ");
+				response = reader.readLine();
+				if (response.equals("T")) {
+					listThreads();
+				} else {
+					ConnectionsToCreate = Integer.parseInt(response);
+					for (int i=0; i<ConnectionsToCreate; i++) {
+						Thread thread = new Thread(new ConnectionThread(dataSource));
+            			thread.start();
+					}
+				}
+			}
 		} finally {
 			closeDatabaseConnectionPool();
 		}
 	}
 
-	private static void createData(String name, int rating) throws SQLException {
-		try (Connection connection = dataSource.getConnection()) {
-			try (PreparedStatement statement = connection.prepareStatement("""
-					    INSERT INTO programming_language(name, rating)
-					    VALUES (?, ?)
-					""")) {
-				statement.setString(1, name);
-				statement.setInt(2, rating);
-				int rowsInserted = statement.executeUpdate();
-				System.out.println("Rows inserted: " + rowsInserted);
-			}
+	public static void listThreads() {
+		Map<Thread, StackTraceElement[]> threads = Thread.getAllStackTraces();
+		for (Thread thread : threads.keySet()) {
+			System.out.println("Thread name: " + thread.getName());
 		}
 	}
 
-	private static void readData() throws SQLException {
-		try (Connection connection = dataSource.getConnection()) {
-			try (PreparedStatement statement = connection.prepareStatement("""
-					    SELECT name, rating
-					    FROM programming_language
-					    ORDER BY rating DESC
-					""")) {
-				try (ResultSet resultSet = statement.executeQuery()) {
-					boolean empty = true;
-					while (resultSet.next()) {
-						empty = false;
-						String name = resultSet.getString("name");
-						int rating = resultSet.getInt("rating");
-						System.out.println("\t> " + name + ": " + rating);
-					}
-					if (empty) {
-						System.out.println("\t (no data)");
-					}
+	private static class ConnectionThread implements Runnable {
+        private final HikariDataSource dataSource;
+
+        public ConnectionThread(HikariDataSource dataSource) {
+            this.dataSource = dataSource;
+        }
+
+        @Override
+        public void run() {
+			Random rand = new Random(); 
+            try (Connection con = dataSource.getConnection()) {
+                System.out.println("Thread " + Thread.currentThread().getId() + " acquired a new connection.");
+				for (int i=0;i<100;i++) {
+					Thread.sleep(rand.nextInt(1000));
+					createData(Thread.currentThread().getName(), Thread.currentThread().getId(), con);
 				}
+				System.out.println("Connection Closed for thread " + Thread.currentThread().getId() + "...");
+				con.close();
+           } catch (SQLException e) {
+                System.err.println("Thread " + Thread.currentThread().getId() + " encountered an error acquiring a connection: " + e.getMessage());
+            } catch (InterruptedException e) {
+				e.printStackTrace();
+			} finally {
+				System.out.println("Thread " + Thread.currentThread().getId() + " Cleaned Up!");
 			}
-		}
+        }
 	}
 
-	private static void updateData(String name, int newRating) throws SQLException {
-		try (Connection connection = dataSource.getConnection()) {
-			try (PreparedStatement statement = connection.prepareStatement("""
-					    UPDATE programming_language
-					    SET rating = ?
-					    WHERE name = ?
-					""")) {
-				statement.setInt(1, newRating);
-				statement.setString(2, name);
-				int rowsUpdated = statement.executeUpdate();
-				System.out.println("Rows updated: " + rowsUpdated);
-			}
-		}
-	}
-
-	private static void deleteData(String nameExpression) throws SQLException {
-		try (Connection connection = dataSource.getConnection()) {
-			try (PreparedStatement statement = connection.prepareStatement("""
-					    DELETE FROM programming_language
-					    WHERE name LIKE ?
-					""")) {
-				statement.setString(1, nameExpression);
-				int rowsDeleted = statement.executeUpdate();
-				System.out.println("Rows deleted: " + rowsDeleted);
-			}
+	private static void createData(String name, long threadId, Connection connection) throws SQLException {
+		try (PreparedStatement statement = connection.prepareStatement("""
+					INSERT INTO t(c, threadId)
+					VALUES (?, ?)
+				""")) {
+			statement.setString(1, name);
+			statement.setLong(2, threadId);
+			statement.executeUpdate();
+			System.out.println("Inserting for " + name + " -> " + threadId);
 		}
 	}
 
 	private static void initDatabaseConnectionPool() {
 		HikariConfig hikariConfig = new HikariConfig("/database.properties");
 		dataSource = new HikariDataSource(hikariConfig);
+		dataSource.setIdleTimeout(10000);
+		dataSource.setMinimumIdle(5);
 	}
 
 	private static void closeDatabaseConnectionPool() {
